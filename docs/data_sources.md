@@ -31,3 +31,19 @@ Every dataset returned must carry `source`, `timestamp`, freshness metadata,
 and validation warnings. Missing/stale data is declared and downgrades
 confidence — never silently filled. Responses are cached. Data is never
 presented as guaranteed accurate.
+
+## ⚠ vibe-trading MCP server — standing risk note
+
+`vibe-trading-ai` (pip) is installed and registered as an MCP server
+(`.mcp.json`) for its research/backtesting tools (SEC filings, fundamentals,
+news, options data, 54 tools total). **It also includes live order-execution
+connectors** (Alpaca, Binance, OKX, Tiger, Futu) with a mandate-gated safety
+model on its own side. No broker credentials are configured — the trading
+tools are present but dormant.
+
+This directly borders Terminal Alpha's own charter (paper-simulation only,
+no real brokerage execution). Standing rule for anyone/anything working in
+this repo, human or agent: **never configure broker credentials for this
+server, never invoke its order-placement tools.** Use it for research/data/
+backtesting reference only. See `.claude/agents/quant-coder.md` for how this
+is enforced in the subagent's own system prompt.
