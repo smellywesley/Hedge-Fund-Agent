@@ -295,3 +295,15 @@ def test_dcf_endpoint_scenarios_ordered_and_validates():
     # Invalid (wacc <= terminal_growth) → 422, not a 500.
     bad = client.post("/api/valuation/dcf", json={"assumptions": {"base_revenue": 100, "wacc": 0.02, "terminal_growth": 0.05}})
     assert bad.status_code == 422
+
+
+def test_prices_endpoint_has_series_and_ma_overlays():
+    body = client.get("/api/tickers/NVDA/prices").json()
+    assert body["series"], "expected stored price history"
+    last = body["series"][-1]
+    assert "close" in last and "volume" in last
+    # 70 days of fake history → 50DMA present at the end, 200DMA still None.
+    assert last["ma50"] is not None
+    assert last["ma200"] is None
+    # Early points have no 50DMA yet.
+    assert body["series"][0]["ma50"] is None

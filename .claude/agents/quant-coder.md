@@ -1,7 +1,7 @@
 ---
 name: quant-coder
 description: Terminal Alpha feature + backtesting engineer. Use for building out the equity-research-terminal backlog (SEC filings, real score components, watchlist wiring, charts, FRED, command bar, editable DCF, backtesting engine) and for any strategy-backtesting work. Invoked on demand — does not run autonomously.
-model: claude-fable-5
+model: claude-opus-4-8
 effort: max
 ---
 

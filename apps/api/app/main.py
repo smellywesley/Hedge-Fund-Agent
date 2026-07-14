@@ -663,6 +663,27 @@ def ticker_filings(symbol: str):
             "asOf": _now(), "filings": fallback}
 
 
+@app.get("/api/tickers/{symbol}/prices")
+def ticker_prices(symbol: str, s: Session = Depends(get_session)):
+    """Stored daily close+volume for a symbol, with server-computed 50/200-day
+    moving-average overlays. Backfills on demand so a fresh symbol still charts."""
+    symbol = symbol.strip().upper()
+    nav.backfill_prices(s, [symbol])
+    rows = s.query(PriceRow).filter_by(symbol=symbol).order_by(PriceRow.date).all()
+    if not rows:
+        return {"symbol": symbol, "source": "none", "asOf": _now(),
+                "warnings": ["No price history available for this symbol"], "series": []}
+    closes = [r.close for r in rows]
+
+    def sma(i: int, w: int) -> float | None:
+        return round(sum(closes[i + 1 - w:i + 1]) / w, 2) if i + 1 >= w else None
+
+    series = [{"date": r.date, "close": r.close, "volume": r.volume,
+               "ma50": sma(i, 50), "ma200": sma(i, 200)} for i, r in enumerate(rows)]
+    return {"symbol": symbol, "source": "yfinance (stored)", "asOf": _now(),
+            "warnings": [], "series": series}
+
+
 @app.get("/api/tickers/{symbol}/news")
 def ticker_news(symbol: str):
     # CONNECTOR: news provider (FMP/Finnhub) in Phase 3
