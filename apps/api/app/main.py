@@ -26,15 +26,22 @@ from sqlalchemy.orm import Session
 # installs if this ever deploys beyond docker-compose.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.mcp.sec import edgar
+from packages.research_engine.backtest import backtest_signal, score_threshold_signal
+from packages.research_engine.regime import compute_regime_score
 from packages.research_engine.risk import beta as risk_beta
 from packages.research_engine.risk import correlation_matrix
-from packages.research_engine.scoring import compute_confidence, compute_research_score
+from packages.research_engine.scoring import (
+    compute_confidence, compute_liquidity_score, compute_research_score,
+    compute_technical_trend,
+)
+from packages.research_engine.valuation import dcf_fair_value, scenario_values
 
 from . import mock_data as mock
 from . import nav
 from .db import (
-    DATABASE_URL, AuditRow, FundRow, JournalRow, PositionRow, WatchlistRow,
-    audit, engine, init_db,
+    DATABASE_URL, AuditRow, FundRow, JournalRow, PositionRow, PriceRow,
+    WatchlistRow, audit, engine, init_db,
 )
 from .prices import get_quotes
 
@@ -135,6 +142,29 @@ def quotes():
     return {"asOf": _now(), "live": bool(live), "items": rows}
 
 
+def _row(rows: list[dict], symbol: str) -> dict | None:
+    return next((r for r in rows if r["symbol"] == symbol), None)
+
+
+def _regime_from_snapshot(vol_rows, sectors, rate_rows, fx_rows) -> dict:
+    """Real risk-on/off regime from the snapshot's macro rows (VIX, sector
+    breadth, 30Y-5Y curve slope, dollar move). Falls back to the mock regime
+    label only if the VIX row is somehow missing."""
+    vix = _row(vol_rows, "VIX")
+    us5y, us30y = _row(rate_rows, "US5Y"), _row(rate_rows, "US30Y")
+    dxy = _row(fx_rows, "DXY")
+    if not vix:
+        return mock.MARKET_SNAPSHOT["regime"]
+    spread = (us30y["last"] - us5y["last"]) if (us5y and us30y) else 0.0
+    r = compute_regime_score(
+        vix=vix["last"],
+        sector_change_pcts=[s["changePct"] for s in sectors],
+        yield_curve_spread=spread,
+        dollar_change_pct=dxy["changePct"] if dxy else 0.0,
+    )
+    return {"label": r["label"], "score": r["score"], "drivers": r["drivers"], "notes": r["note"]}
+
+
 @app.get("/api/markets/snapshot")
 def markets_snapshot():
     all_syms = [yf for spec in (INDICES, RATES, FX, COMMODITIES, VOLATILITY) for _, _, yf, _ in spec]
@@ -145,19 +175,22 @@ def markets_snapshot():
     for sym, name in SECTORS:
         q = live.get(sym)
         sectors.append({"symbol": sym, "name": name, "changePct": q["changePct"] if q else MOCK_QUOTES[sym][1]})
+    rate_rows = _quote_rows(RATES, live)
+    fx_rows = _quote_rows(FX, live)
+    vol_rows = _quote_rows(VOLATILITY, live)
     return {
         "asOf": _now(),
         "source": "yfinance" if live else "MOCK",
         "live": bool(live),
         "warnings": warnings,
         "indices": _quote_rows(INDICES, live),
-        "rates": _quote_rows(RATES, live),
-        "fx": _quote_rows(FX, live),
+        "rates": rate_rows,
+        "fx": fx_rows,
         "commodities": _quote_rows(COMMODITIES, live),
-        "volatility": _quote_rows(VOLATILITY, live),
+        "volatility": vol_rows,
         "sectors": sectors,
-        # Regime + AI brief stay mock until the research engine computes them (Phase 4).
-        "regime": mock.MARKET_SNAPSHOT["regime"],
+        # Real regime score computed from the live macro data above (no FRED key).
+        "regime": _regime_from_snapshot(vol_rows, sectors, rate_rows, fx_rows),
         "aiBrief": {
             "agent": mock.MARKET_SNAPSHOT["ai_brief"]["agent"],
             "asOf": mock.AS_OF,
@@ -192,11 +225,20 @@ class WatchlistAdd(BaseModel):
 def watchlist(s: Session = Depends(get_session)):
     rows = s.query(WatchlistRow).order_by(WatchlistRow.id).all()
     live = get_quotes([r.symbol for r in rows]) if rows else {}
+    _, spy = nav.price_series(s, nav.BENCHMARK)
     items = []
     for r in rows:
         meta = WATCH_META.get(r.symbol, {})
         q = live.get(r.symbol)
         mock_last, mock_chg = MOCK_QUOTES.get(r.symbol, (0.0, 0.0))
+        # Real technical-trend score from stored price history when available;
+        # mock meta score otherwise (declared via scoreSource).
+        _, closes = nav.price_series(s, r.symbol)
+        trend = compute_technical_trend(closes, spy) if closes else None
+        if trend is not None:
+            score, score_source = round(trend), "technical (live)"
+        else:
+            score, score_source = meta.get("score", 0), "mock"
         items.append({
             "symbol": r.symbol,
             "company": meta.get("company", r.symbol),
@@ -204,7 +246,8 @@ def watchlist(s: Session = Depends(get_session)):
             "changePct": q["changePct"] if q else mock_chg,
             "source": "yfinance" if q else "MOCK",
             "volumeVsAvg": meta.get("volume_vs_avg", 0.0),
-            "score": meta.get("score", 0),
+            "score": score,
+            "scoreSource": score_source,
             "confidence": meta.get("confidence", "Low"),
             "catalyst": meta.get("catalyst", "—"),
             "latestFiling": meta.get("latest_filing", "—"),
@@ -607,9 +650,17 @@ def ticker_financials(symbol: str):
 
 @app.get("/api/tickers/{symbol}/filings")
 def ticker_filings(symbol: str):
-    # CONNECTOR: SEC EDGAR full-text search + filing index (packages/mcp/sec)
-    _require_ticker(symbol)
-    return mock.FILINGS.get(symbol.upper(), [])
+    """Real 10-K/10-Q/8-K metadata from SEC EDGAR (keyless), any US ticker.
+    Falls back to mock filings with a warning if EDGAR is unreachable."""
+    symbol = symbol.strip().upper()
+    filings = edgar.get_recent_filings(symbol, limit=15)
+    if filings:
+        return {"symbol": symbol, "source": "SEC EDGAR", "live": True,
+                "warnings": [], "asOf": _now(), "filings": filings}
+    fallback = mock.FILINGS.get(symbol, [])
+    return {"symbol": symbol, "source": "MOCK", "live": False,
+            "warnings": ["SEC EDGAR returned nothing (unknown ticker or fetch failed) — showing mock fallback"],
+            "asOf": _now(), "filings": fallback}
 
 
 @app.get("/api/tickers/{symbol}/news")
@@ -619,14 +670,42 @@ def ticker_news(symbol: str):
     return mock.NEWS.get(symbol.upper(), [])
 
 
+def _real_components(s: Session, symbol: str) -> tuple[dict, list[str]]:
+    """Compute the two real score components (technical_trend, liquidity_risk)
+    from stored price history. Returns (overrides, real_keys). Backfills price
+    history on demand so a fresh symbol still gets scored."""
+    nav.backfill_prices(s, [symbol, nav.BENCHMARK])
+    _, closes = nav.price_series(s, symbol)
+    _, spy = nav.price_series(s, nav.BENCHMARK)
+    overrides, real = {}, []
+    tech = compute_technical_trend(closes, spy)
+    if tech is not None:
+        overrides["technical_trend"] = tech
+        real.append("technical_trend")
+    rows = (s.query(PriceRow).filter_by(symbol=symbol)
+            .order_by(PriceRow.date.desc()).limit(20).all())
+    advs = [r.close * r.volume for r in rows if r.volume]
+    if advs:
+        overrides["liquidity_risk"] = compute_liquidity_score(sum(advs) / len(advs))
+        real.append("liquidity_risk")
+    return overrides, real
+
+
 @app.get("/api/research/{symbol}/latest")
-def research_latest(symbol: str):
+def research_latest(symbol: str, s: Session = Depends(get_session)):
     symbol = _require_ticker(symbol)
     if symbol != "NVDA":
         raise HTTPException(404, "Phase 1 ships one full mock report: NVDA")
-    score = compute_research_score(mock.SCORE_COMPONENTS_NVDA)
+    # Two components are now real (from price history); the rest stay mock and
+    # are declared so, honouring the never-hide-the-seam rule.
+    overrides, real_keys = _real_components(s, symbol)
+    components = {**mock.SCORE_COMPONENTS_NVDA, **overrides}
+    score = compute_research_score(components)
+    score["real_components"] = real_keys
+    score["mock_components"] = [k for k in components if k not in real_keys]
     confidence = compute_confidence(**mock.CONFIDENCE_FACTORS_NVDA)
-    return {**mock.RESEARCH_NVDA, "score": score, "confidence": confidence}
+    return {**mock.RESEARCH_NVDA, "score": score, "confidence": confidence,
+            "component_sources": {"real": real_keys, "mock": score["mock_components"]}}
 
 
 @app.post("/api/research/{symbol}/run")
@@ -648,3 +727,51 @@ def agent_outputs():
 @app.get("/api/reports")
 def reports():
     return mock.REPORTS
+
+
+# ---------------------------------------------------------------- backtest + valuation
+
+@app.get("/api/backtest")
+def backtest(symbols: str, threshold: float = 50.0, benchmark: str = nav.BENCHMARK,
+             s: Session = Depends(get_session)):
+    """Backtest a 'hold names with technical-trend score > threshold' signal
+    vs benchmark buy-and-hold, over stored price history. The score is the REAL
+    technical-trend component (not a mock), so this is a genuine signal test."""
+    universe = [x.strip().upper() for x in symbols.split(",") if x.strip()]
+    if not universe:
+        raise HTTPException(422, "Provide at least one symbol, e.g. ?symbols=NVDA,TSM,MSFT")
+    nav.backfill_prices(s, universe + [benchmark])
+    _, spy = nav.price_series(s, benchmark)
+    prices_by_symbol = {sym: nav.price_series(s, sym)[1] for sym in universe}
+    scores = {sym: t for sym in universe
+              if (t := compute_technical_trend(prices_by_symbol[sym], spy)) is not None}
+    signal = score_threshold_signal(scores, threshold)
+    result = backtest_signal(prices_by_symbol, signal, spy)
+    result["source"] = "stored PriceRow (market_prices_daily) via nav.price_series"
+    result["signal"] = f"hold technical-trend score > {threshold}"
+    result["scores"] = {k: round(v, 1) for k, v in scores.items()}
+    result["asOf"] = _now()
+    audit(s, "backtest", detail_symbols=",".join(universe), threshold=threshold)
+    s.commit()
+    return result
+
+
+class DcfRequest(BaseModel):
+    bear: dict | None = None
+    base: dict | None = None
+    bull: dict | None = None
+    assumptions: dict | None = None  # single-scenario alternative
+
+
+@app.post("/api/valuation/dcf")
+def valuation_dcf(body: DcfRequest):
+    """Editable DCF. Send {bear, base, bull} assumption sets for the three-column
+    Model Lab view, or a single {assumptions} set. Invalid inputs → 422."""
+    try:
+        if body.assumptions is not None:
+            return {"single": dcf_fair_value(body.assumptions), "asOf": _now()}
+        if not (body.bear and body.base and body.bull):
+            raise HTTPException(422, "Provide bear+base+bull assumption sets, or a single 'assumptions' set")
+        return {**scenario_values(body.bear, body.base, body.bull), "asOf": _now()}
+    except ValueError as e:
+        raise HTTPException(422, str(e))

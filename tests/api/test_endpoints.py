@@ -17,9 +17,15 @@ from app import nav as navmod
 from app.db import init_db
 from app.main import app
 
-# ponytail: monkeypatch-by-assignment — tests must never hit Yahoo.
+# ponytail: monkeypatch-by-assignment — tests must never hit Yahoo or SEC.
 main.get_quotes = lambda symbols: {}
 navmod.get_quotes = lambda symbols: {}
+main.edgar.get_recent_filings = lambda symbol, forms=None, limit=10: (
+    [{"formType": "10-Q", "filingDate": "2026-05-28", "accessionNumber": "x",
+      "primaryDocUrl": "https://www.sec.gov/Archives/edgar/data/1045810/x/nvda.htm",
+      "title": "NVDA 10-Q", "source": "SEC EDGAR", "asOf": "2026-07-14T00:00:00Z"}]
+    if symbol.upper() == "NVDA" else []
+)
 
 # Deterministic fake history: 70 trading days from the simulated inception.
 # SPY follows a zigzag return pattern (net-positive drift); every stock moves
@@ -227,3 +233,65 @@ def test_audit_log_records_events():
     assert "price_backfill" in events
     assert "nav_backfill" in events
     assert "paper_position_close" in events
+
+
+# ----------------------------------------------- integration wiring (Wave 1)
+
+def test_markets_regime_is_computed_with_drivers():
+    body = client.get("/api/markets/snapshot").json()
+    regime = body["regime"]
+    assert regime["label"] in ("RISK-ON", "NEUTRAL", "RISK-OFF")
+    assert isinstance(regime["score"], (int, float))
+    assert set(regime["drivers"]) == {"vix", "breadth", "curve", "dollar"}
+
+
+def test_research_declares_real_vs_mock_components():
+    body = client.get("/api/research/NVDA/latest").json()
+    src = body["component_sources"]
+    # technical_trend + liquidity_risk are computed from the fake history.
+    assert "technical_trend" in src["real"]
+    assert "liquidity_risk" in src["real"]
+    assert "valuation" in src["mock"]  # still mock
+    assert body["score"]["score_total"] > 0
+
+
+def test_filings_uses_sec_with_source_tag():
+    body = client.get("/api/tickers/NVDA/filings").json()
+    assert body["source"] == "SEC EDGAR"
+    assert body["filings"] and body["filings"][0]["primaryDocUrl"].startswith("https://www.sec.gov/")
+    # Unknown ticker → mock fallback with a warning, never a crash.
+    zz = client.get("/api/tickers/AAPL/filings").json()
+    assert zz["source"] == "MOCK"
+    assert zz["warnings"]
+
+
+def test_watchlist_score_is_real_when_history_exists():
+    items = client.get("/api/watchlist").json()
+    nvda = next(w for w in items if w["symbol"] == "NVDA")
+    # fake history is a strong uptrend at 2x SPY → technical score, live source.
+    assert nvda["scoreSource"] == "technical (live)"
+    assert isinstance(nvda["score"], (int, float))
+
+
+def test_backtest_endpoint_runs_over_history():
+    r = client.get("/api/backtest?symbols=NVDA,MSFT&threshold=0").json()
+    assert r["available"] is True
+    assert "strategyReturnPct" in r and "benchmarkReturnPct" in r and "excessPct" in r
+    # 2x-SPY names held vs SPY benchmark → strategy beats benchmark.
+    assert r["excessPct"] > 0
+    assert r["scores"]  # real technical-trend scores surfaced
+
+
+def test_dcf_endpoint_scenarios_ordered_and_validates():
+    common = {"base_revenue": 100.0, "operating_margin": 0.20, "tax_rate": 0.15,
+              "capex_pct": 0.05, "shares_out": 10.0, "net_cash": 0.0, "wacc": 0.10}
+    body = {
+        "bear": {**common, "revenue_growth": 0.02, "terminal_growth": 0.01},
+        "base": {**common, "revenue_growth": 0.10, "terminal_growth": 0.03},
+        "bull": {**common, "revenue_growth": 0.20, "terminal_growth": 0.045},
+    }
+    r = client.post("/api/valuation/dcf", json=body).json()
+    assert r["bear"]["fairValuePerShare"] < r["base"]["fairValuePerShare"] < r["bull"]["fairValuePerShare"]
+    # Invalid (wacc <= terminal_growth) → 422, not a 500.
+    bad = client.post("/api/valuation/dcf", json={"assumptions": {"base_revenue": 100, "wacc": 0.02, "terminal_growth": 0.05}})
+    assert bad.status_code == 422
