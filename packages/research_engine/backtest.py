@@ -19,11 +19,10 @@ Everything here is educational / paper simulation only — not a live trading
 system, not investment advice.
 """
 
-# Type alias for a per-step signal: given the step index and the price history
-# visible SO FAR (each series truncated to length step+1), return the symbols
-# to hold for the next interval. Receiving only the prefix is what structurally
-# guarantees no look-ahead — the engine never hands a signal a future price.
-SelectFn = "Callable[[int, dict[str, list[float]]], list[str]]"
+# A "signal" here is any callable fn(step_index, history) -> list[str], where
+# history[symbol] is that symbol's closes truncated to length step_index+1.
+# Receiving only the prefix is what structurally guarantees no look-ahead — the
+# engine never hands a signal a future price.
 
 
 def _common_window(benchmark: list[float], prices_by_symbol: dict[str, list[float]]) -> int:

@@ -701,11 +701,10 @@ def research_latest(symbol: str, s: Session = Depends(get_session)):
     overrides, real_keys = _real_components(s, symbol)
     components = {**mock.SCORE_COMPONENTS_NVDA, **overrides}
     score = compute_research_score(components)
-    score["real_components"] = real_keys
-    score["mock_components"] = [k for k in components if k not in real_keys]
     confidence = compute_confidence(**mock.CONFIDENCE_FACTORS_NVDA)
     return {**mock.RESEARCH_NVDA, "score": score, "confidence": confidence,
-            "component_sources": {"real": real_keys, "mock": score["mock_components"]}}
+            "component_sources": {"real": real_keys,
+                                  "mock": [k for k in components if k not in real_keys]}}
 
 
 @app.post("/api/research/{symbol}/run")
