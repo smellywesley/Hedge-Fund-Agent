@@ -20,7 +20,7 @@ from app.main import app
 # ponytail: monkeypatch-by-assignment — tests must never hit Yahoo or SEC.
 main.get_quotes = lambda symbols: {}
 navmod.get_quotes = lambda symbols: {}
-main.edgar.get_recent_filings = lambda symbol, forms=None, limit=10: (
+main.sec_get_filings = lambda symbol, forms=None, limit=10: (
     [{"formType": "10-Q", "filingDate": "2026-05-28", "accessionNumber": "x",
       "primaryDocUrl": "https://www.sec.gov/Archives/edgar/data/1045810/x/nvda.htm",
       "title": "NVDA 10-Q", "source": "SEC EDGAR", "asOf": "2026-07-14T00:00:00Z"}]

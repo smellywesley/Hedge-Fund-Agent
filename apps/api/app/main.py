@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 # installs if this ever deploys beyond docker-compose.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from packages.mcp.sec import edgar
+from packages.mcp.sec.edgar import get_recent_filings as sec_get_filings
 from packages.research_engine.backtest import backtest_signal, score_threshold_signal
 from packages.research_engine.regime import compute_regime_score
 from packages.research_engine.risk import beta as risk_beta
@@ -653,7 +653,7 @@ def ticker_filings(symbol: str):
     """Real 10-K/10-Q/8-K metadata from SEC EDGAR (keyless), any US ticker.
     Falls back to mock filings with a warning if EDGAR is unreachable."""
     symbol = symbol.strip().upper()
-    filings = edgar.get_recent_filings(symbol, limit=15)
+    filings = sec_get_filings(symbol, limit=15)
     if filings:
         return {"symbol": symbol, "source": "SEC EDGAR", "live": True,
                 "warnings": [], "asOf": _now(), "filings": filings}
