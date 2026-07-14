@@ -1,12 +1,14 @@
-"""Research scoring engine — Phase 1 mock implementation.
+"""Research scoring engine.
 
 Component-weighted score (never a single opaque AI number) plus a separate
 confidence rating driven by data completeness/freshness/agreement.
 
-Phase 4 will replace the mock component inputs with computed features from
-live data (OpenBB / yfinance / SEC / FRED connectors in packages/mcp).
-All output is educational research scoring — not investment advice.
+Two of the nine components are now computed from real stored price history
+(compute_technical_trend, compute_liquidity_score below); the other seven
+remain mock inputs until their own data lands, and the API declares which are
+real vs mock. All output is educational research scoring — not investment advice.
 """
+import math
 
 WEIGHTS = {
     "business_quality": 0.15,
@@ -58,3 +60,58 @@ def compute_confidence(
     if avg >= 0.5:
         return "Medium"
     return "Low"
+
+
+# --------------------------------------------------------------------------
+# Real score components computed from stored price history (backlog item 2).
+# Pure functions over plain lists — house style (see risk.py). Feed these the
+# closes from db.PriceRow via nav.price_series(); SPY closes for relative
+# strength. Both return a 0-100 component score.
+# --------------------------------------------------------------------------
+
+def _mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs)
+
+
+def compute_technical_trend(closes: list[float], spy_closes: list[float] | None = None) -> float | None:
+    """0-100 technical-trend score from price vs its 50/200-day moving averages
+    and relative strength vs SPY. Discrete, documented blend (first real cut):
+
+        +40  last price >= 50-day MA         (intermediate uptrend)
+        +30  last price >= 200-day MA         (long-term uptrend; if <200 closes
+             available, the full-length mean is used as a proxy — noted)
+        +30  trailing return >= SPY's over the same window (positive RS);
+             +15 (neutral) if no benchmark is supplied
+
+    Returns None if fewer than 50 closes — too little to judge a trend (the
+    caller declares it missing rather than scoring on noise).
+    """
+    if len(closes) < 50:
+        return None
+    price = closes[-1]
+    score = 0.0
+    score += 40.0 if price >= _mean(closes[-50:]) else 0.0
+    ma_long = _mean(closes[-200:]) if len(closes) >= 200 else _mean(closes)
+    score += 30.0 if price >= ma_long else 0.0
+    if spy_closes and len(spy_closes) >= 2 and len(closes) >= 2:
+        w = min(60, len(closes) - 1, len(spy_closes) - 1)
+        stock_ret = closes[-1] / closes[-1 - w] - 1
+        spy_ret = spy_closes[-1] / spy_closes[-1 - w] - 1
+        score += 30.0 if stock_ret >= spy_ret else 0.0
+    else:
+        score += 15.0  # neutral half-credit when no benchmark is available
+    return round(score, 1)
+
+
+def compute_liquidity_score(dollar_adv: float) -> float:
+    """0-100 liquidity score from average daily dollar volume (price × shares).
+    Log-scaled between $100k ADV (score 0, effectively untradeable) and $10bn
+    ADV (score 100, mega-cap depth). Monotonic; clamps outside the range.
+
+        ~$1M ADV   -> ~20    ~$100M ADV -> ~60    ~$1bn ADV -> ~80
+    """
+    if dollar_adv <= 0:
+        return 0.0
+    lo, hi = 1e5, 1e10
+    x = max(lo, min(hi, dollar_adv))
+    return round((math.log10(x) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * 100, 1)
