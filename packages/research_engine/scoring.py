@@ -150,3 +150,9 @@ def compute_valuation(earnings_yield: float) -> float:
     if earnings_yield <= 0:
         return 0.0
     return round(_clamp01(earnings_yield / 0.06) * 100, 1)
+
+
+def compute_growth_momentum(forward_revenue_growth: float) -> float:
+    """0-100 from analyst forward revenue-growth estimate (a fraction). Maps
+    -10% → 0, ~0% → ~29, 25%+ → 100."""
+    return round(_clamp01((forward_revenue_growth + 0.10) / 0.35) * 100, 1)

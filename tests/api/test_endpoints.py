@@ -31,6 +31,8 @@ main.sec_get_filings = lambda symbol, forms=None, limit=10: (
 main.run_ai_research = lambda symbol, context, api_key=None, model=None: {
     "blocked": True, "reason": "stubbed in tests", "symbol": symbol,
 }
+# FMP estimates: blocked in tests (no key) → growth_momentum stays mock.
+main.fmp_estimates = lambda symbol, api_key=None: {"blocked": True, "reason": "no key (test)", "source": "FMP"}
 # SEC XBRL fundamentals fixture (offline) → business_quality/balance_sheet/valuation real.
 main.get_company_facts = lambda symbol: ({
     "revenue": 60_922e6, "gross_profit": 44_301e6, "operating_income": 32_972e6,

@@ -76,3 +76,11 @@ def test_valuation_from_earnings_yield():
     assert compute_valuation(0.06) == 100.0                  # ~P/E 16 → cheap
     assert compute_valuation(0.03) == 50.0
     assert compute_valuation(0.20) == 100.0                  # clamps
+
+
+def test_growth_momentum_from_forward_estimate():
+    from packages.research_engine.scoring import compute_growth_momentum
+    assert compute_growth_momentum(0.25) == 100.0     # 25%+ → max
+    assert compute_growth_momentum(-0.10) == 0.0       # -10% → floor
+    assert compute_growth_momentum(-0.20) == 0.0       # clamps
+    assert 25 <= compute_growth_momentum(0.0) <= 32     # ~flat → ~29

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 # installs if this ever deploys beyond docker-compose.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.mcp.fmp.client import get_estimates as fmp_estimates
 from packages.mcp.sec.edgar import get_company_facts
 from packages.mcp.sec.edgar import get_recent_filings as sec_get_filings
 from packages.research_engine.backtest import backtest_signal, score_threshold_signal
@@ -34,8 +35,8 @@ from packages.research_engine.risk import beta as risk_beta
 from packages.research_engine.risk import correlation_matrix
 from packages.research_engine.scoring import (
     compute_balance_sheet, compute_business_quality, compute_confidence,
-    compute_liquidity_score, compute_research_score, compute_technical_trend,
-    compute_valuation,
+    compute_growth_momentum, compute_liquidity_score, compute_research_score,
+    compute_technical_trend, compute_valuation,
 )
 from packages.research_engine.valuation import dcf_fair_value, scenario_values
 
@@ -738,6 +739,12 @@ def _real_components(s: Session, symbol: str) -> tuple[dict, list[str]]:
         if market_cap > 0:
             overrides["valuation"] = compute_valuation(f["net_income"] / market_cap)
             real.append("valuation")
+
+    # Growth momentum from FMP analyst estimates (keyed; blocked without FMP_API_KEY).
+    est = fmp_estimates(symbol)
+    if not est.get("blocked") and est.get("forwardRevenueGrowth") is not None:
+        overrides["growth_momentum"] = compute_growth_momentum(est["forwardRevenueGrowth"])
+        real.append("growth_momentum")
     return overrides, real
 
 

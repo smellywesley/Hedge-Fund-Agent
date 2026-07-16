@@ -31,6 +31,18 @@ warning, so the UI never breaks.
 - The paper fund is a single shared instance (no user accounts yet) — fine for personal
   use; add auth before sharing widely.
 
+## Optional keys (set as Railway env vars — each activates a feature)
+
+| Env var | Enables | Without it |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | the live **Run Research** button (calls Claude; your tokens per press) | button returns "not configured" |
+| `RESEARCH_MODEL` | override the model id (default `claude-sonnet-4-5`) | uses the default |
+| `FMP_API_KEY` | real `growth_momentum` from analyst estimates (free tier) | component stays mock |
+| `FRED_API_KEY` | richer macro series | regime already works from yfinance |
+
+All are blocked-not-faked when absent — the app never fabricates data, so
+missing keys never break the deploy.
+
 ## Notes / known limits in production
 
 - **yfinance throttling:** datacenter IPs get rate-limited by Yahoo more than home IPs.
