@@ -85,8 +85,20 @@ tests/                    scoring engine + API endpoint tests (17)
 ## Phase roadmap
 
 1. ~~UI shell + mock API~~ ✅
-2. ~~Persistence (watchlist, paper positions, journal, audit logs)~~ ✅ (SQLite default / Postgres opt-in)
-3. Data connectors — **yfinance prices done**; OpenBB, SEC EDGAR filings, FRED macro remain
-4. Real research engine — **NAV history, real P&L, cash bookkeeping, beta/vol/drawdown/correlations done** (Workstream 1); scoring features from live data + editable DCF remain
-5. Claude subagent orchestration + Audit Agent
-6. Report export (md/HTML/PDF)
+2. ~~Persistence (watchlist, paper positions, journal, audit logs)~~ ✅
+3. ~~Data connectors — yfinance prices + history, SEC EDGAR filings, real regime from macro~~ ✅ (OpenBB deferred)
+4. Real research engine — ✅ NAV history, real P&L, cash bookkeeping, beta/vol/drawdown/correlations, backtest engine, editable DCF, **5 of 9 score components real** (technical/liquidity from prices; business-quality/balance-sheet/valuation from SEC XBRL)
+5. Claude subagent (quant-coder) — real analyst narrative — **prepped, see `docs/phase_b_narrative_task.md`** (runs Jul 18+)
+6. Report export (md/HTML/PDF) + user accounts — pending
+
+**Deploy:** ready — see `DEPLOY.md` (Vercel web + Railway API/Postgres).
+
+## Score components — real vs mock (as of Phase C)
+
+| Real (5) | Source | Mock (4) |
+|---|---|---|
+| technical_trend | price history (50/200DMA, RS) | growth_momentum |
+| liquidity_risk | dollar ADV | catalyst_strength |
+| business_quality | SEC XBRL margins | estimate_revision |
+| balance_sheet | SEC XBRL leverage/cash | news_sentiment |
+| valuation | SEC XBRL earnings yield | |
