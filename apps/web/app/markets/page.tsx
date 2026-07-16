@@ -5,7 +5,11 @@ import type { MarketSnapshot, Quote } from "@/lib/types";
 import { SourceBadge } from "@/components/SourceBadge";
 import { AiMeta, Panel, Pct, Table } from "@/components/ui";
 
-type Snapshot = MarketSnapshot & { live?: boolean; warnings?: string[] };
+type Drivers = { vix: number; breadth: number; curve: number; dollar: number };
+type Snapshot = MarketSnapshot & {
+  live?: boolean; warnings?: string[];
+  regime: MarketSnapshot["regime"] & { drivers?: Drivers };
+};
 
 function QuotePanel({ title, quotes }: { title: string; quotes: Quote[] }) {
   return (
@@ -42,9 +46,23 @@ export default function MarketsPage() {
         <QuotePanel title="Commodities" quotes={data.commodities} />
         <QuotePanel title="Volatility" quotes={data.volatility} />
 
-        <Panel title="Market Regime">
-          <div className="text-lg text-term-green">{data.regime.label}</div>
+        <Panel title="Market Regime" right={<SourceBadge status={status} live={data.live} />}>
+          <div className={`text-lg ${data.regime.label === "RISK-ON" ? "text-term-green" : data.regime.label === "RISK-OFF" ? "text-term-red" : "text-term-amber"}`}>
+            {data.regime.label}
+          </div>
           <div className="text-term-dim">Regime score: {data.regime.score}/100</div>
+          {data.regime.drivers && (
+            <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[10px]">
+              {([["VIX", data.regime.drivers.vix, 40], ["Breadth", data.regime.drivers.breadth, 30],
+                 ["Curve", data.regime.drivers.curve, 20], ["Dollar", data.regime.drivers.dollar, 10]] as const).map(
+                ([label, val, max]) => (
+                  <div key={label} className="border border-term-border p-1">
+                    <div className="text-term-dim">{label}</div>
+                    <div className="text-term-text">{val}/{max}</div>
+                  </div>
+                ))}
+            </div>
+          )}
           <p className="mt-1">{data.regime.notes}</p>
         </Panel>
 

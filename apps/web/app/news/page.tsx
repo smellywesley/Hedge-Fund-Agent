@@ -45,7 +45,7 @@ export default function NewsPage() {
       <Panel
         title="Latest Filings"
         className="xl:col-span-2"
-        right={<SourceBadge status={status} live={data.live} />}
+        right={<SourceBadge status={status} live={data.live} liveLabel="SEC EDGAR" mockLabel="MOCK FALLBACK" />}
       >
         <div className="mb-2 flex items-center gap-2">
           <input
