@@ -41,6 +41,7 @@ from packages.research_engine.valuation import dcf_fair_value, scenario_values
 
 from . import mock_data as mock
 from . import nav
+from .research_agent import generate_research as run_ai_research
 from .db import (
     DATABASE_URL, AuditRow, FundRow, JournalRow, PositionRow, PriceRow,
     WatchlistRow, audit, engine, init_db,
@@ -758,12 +759,27 @@ def research_latest(symbol: str, s: Session = Depends(get_session)):
 
 @app.post("/api/research/{symbol}/run")
 def research_run(symbol: str, s: Session = Depends(get_session)):
-    symbol = _require_ticker(symbol)
-    # Phase 5 kicks off the real multi-agent job here (see §9.2 lifecycle).
-    audit(s, "research_run", symbol, status="READY", mode="mock")
+    """Live AI research — calls Claude (ANTHROPIC_API_KEY) grounded in real
+    SEC facts + filings + price data. Works for any ticker. Blocked (not faked)
+    if no key. Costs the operator's Anthropic tokens per call."""
+    symbol = _validate_symbol(symbol)
+    facts = get_company_facts(symbol)
+    filings = sec_get_filings(symbol, limit=5)
+    _, closes = nav.price_series(s, symbol)
+    _, spy = nav.price_series(s, nav.BENCHMARK)
+    context = {
+        "fundamentals": facts or "unavailable",
+        "recent_filings": [{"form": f["formType"], "date": f["filingDate"]} for f in filings],
+        "price_summary": {
+            "last_close": closes[-1] if closes else None,
+            "technical_trend_score": compute_technical_trend(closes, spy) if closes else None,
+        },
+    }
+    result = run_ai_research(symbol, context)
+    audit(s, "research_run", symbol, blocked=result.get("blocked", False),
+          model=result.get("model"), tokens=result.get("usage"))
     s.commit()
-    return {"symbol": symbol, "job_id": "mock-job-1", "status": "READY",
-            "note": "Mock run — returns the canned NVDA report instantly."}
+    return result
 
 
 @app.get("/api/agents/outputs")

@@ -1,8 +1,69 @@
 "use client";
+import { useState } from "react";
 import { RESEARCH_NVDA as R } from "@/lib/mock";
-import { useApi } from "@/lib/api";
+import { apiSend, useApi } from "@/lib/api";
 import { PriceChart } from "@/components/PriceChart";
 import { AiMeta, ConfidenceBadge, Panel, StatusBadge, Table } from "@/components/ui";
+
+interface AiNote {
+  blocked?: boolean; reason?: string;
+  snapshot?: string; business_model?: string; bull_case?: string; bear_case?: string;
+  red_team?: string; key_risks?: string[]; sources?: string[]; confidence?: string;
+  missing_data?: string[]; model?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+}
+
+function RunResearch() {
+  const [note, setNote] = useState<AiNote | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+
+  async function run() {
+    setError(""); setRunning(true); setNote(null);
+    try {
+      setNote(await apiSend("/api/research/NVDA/run", "POST"));
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="AI Research (live)"
+      right={
+        <button onClick={run} disabled={running}
+          className="border border-term-amber px-2 py-0.5 text-term-amber hover:bg-term-amber/10 disabled:opacity-50">
+          {running ? "RUNNING…" : "▶ RUN RESEARCH"}
+        </button>
+      }
+    >
+      {!note && !error && (
+        <p className="text-[10px] text-term-dim">
+          Calls Claude with real SEC filings + fundamentals + price data to write a sourced note.
+          Costs your Anthropic API tokens per run; needs ANTHROPIC_API_KEY on the server.
+        </p>
+      )}
+      {error && <p className="text-term-red">⚠ {error}</p>}
+      {note?.blocked && <p className="text-term-amber">⚠ {note.reason}</p>}
+      {note && !note.blocked && (
+        <div className="space-y-1">
+          {note.snapshot && <p><span className="text-term-dim">SNAPSHOT: </span>{note.snapshot}</p>}
+          {note.bull_case && <p className="text-term-green">BULL: {note.bull_case}</p>}
+          {note.bear_case && <p className="text-term-red">BEAR: {note.bear_case}</p>}
+          {note.red_team && <p className="text-term-amber">RED-TEAM: {note.red_team}</p>}
+          <div className="mt-1 border-t border-term-border pt-1 text-[10px] text-term-dim">
+            SRC: {(note.sources ?? []).join(", ") || "—"} · CONF: {note.confidence ?? "—"} · MODEL: {note.model}
+            {note.usage && ` · ${note.usage.input_tokens}+${note.usage.output_tokens} tok`}
+          </div>
+          {note.missing_data?.length ? <p className="text-[10px] text-term-amber">MISSING: {note.missing_data.join("; ")}</p> : null}
+          <p className="text-[10px] text-term-dim">Educational / paper simulation — not investment advice.</p>
+        </div>
+      )}
+    </Panel>
+  );
+}
 
 const meta = { sources: ["MOCK research pack"], asOf: R.asOf, confidence: R.confidence, missingData: R.missingData };
 
@@ -70,10 +131,10 @@ export default function ResearchPage() {
       <div className="flex items-center gap-3 border border-term-border bg-term-panel p-2">
         <span className="text-term-dim">EQUITY RESEARCH:</span>
         <span className="border border-term-amber px-2 py-0.5 text-term-amber">{R.symbol}</span>
-        <button className="border border-term-border px-2 py-0.5 text-term-dim" title="Phase 5 runs the agent workflow">RUN RESEARCH (mock)</button>
-        <button className="border border-term-border px-2 py-0.5 text-term-dim" title="Phase 6 builds exportable reports">BUILD REPORT (mock)</button>
-        <span className="ml-auto text-[10px] text-term-dim">Live price + real score components; narrative is mock (NVDA)</span>
+        <span className="ml-auto text-[10px] text-term-dim">Live price + real score components + on-demand AI research (NVDA)</span>
       </div>
+
+      <RunResearch />
 
       <PriceChart symbol="NVDA" />
 
