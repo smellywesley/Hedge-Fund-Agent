@@ -47,9 +47,16 @@ from .prices import get_quotes
 
 app = FastAPI(title="Terminal Alpha API", version="0.2.0")
 
+# CORS origins: localhost for dev + any ALLOWED_ORIGINS (comma-separated env,
+# e.g. the deployed Vercel URL). Keeps prod deploys working without a code change.
+import os as _os
+
+_origins = ["http://localhost:3000"] + [
+    o.strip() for o in _os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

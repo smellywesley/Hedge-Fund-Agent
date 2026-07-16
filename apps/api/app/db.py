@@ -17,6 +17,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 # and install psycopg2-binary to switch.
 DEFAULT_SQLITE = f"sqlite:///{Path(__file__).resolve().parents[1] / 'terminal_alpha.db'}"
 DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_SQLITE)
+# Railway/Heroku hand out postgres:// which SQLAlchemy 2.0 rejects — normalize.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 engine = create_engine(
     DATABASE_URL,

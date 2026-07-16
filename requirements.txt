@@ -1,0 +1,7 @@
+# Root requirements for Railway/host deploy (installs the API's deps + Postgres driver).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+sqlalchemy>=2.0
+yfinance>=0.2.40
+psycopg2-binary>=2.9
