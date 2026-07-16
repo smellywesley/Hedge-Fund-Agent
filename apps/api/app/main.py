@@ -49,7 +49,7 @@ from .db import (
     DATABASE_URL, AuditRow, FundRow, JournalRow, PositionRow, PriceRow,
     ResearchReportRow, WatchlistRow, audit, engine, init_db,
 )
-from .prices import get_quotes
+from .prices import get_news, get_quotes
 
 app = FastAPI(title="Terminal Alpha API", version="0.2.0")
 
@@ -786,11 +786,14 @@ def research_latest(symbol: str, s: Session = Depends(get_session)):
 
 
 @app.post("/api/research/{symbol}/run")
-def research_run(symbol: str, s: Session = Depends(get_session)):
-    """Live AI research — calls Claude (ANTHROPIC_API_KEY) grounded in real
-    SEC facts + filings + price data. Works for any ticker. Blocked (not faked)
-    if no key. Costs the operator's Anthropic tokens per call."""
+def research_run(symbol: str, mode: str = "debate", s: Session = Depends(get_session)):
+    """Live AI research — Claude (ANTHROPIC_API_KEY) grounded in real SEC facts,
+    filings, prices, and headlines. mode=debate (default) runs the three-agent
+    bull/bear/PM flow (~3x tokens); mode=single is one cheaper call. Blocked
+    (not faked) if no key."""
     symbol = _validate_symbol(symbol)
+    if mode not in ("debate", "single"):
+        raise HTTPException(422, "mode must be 'debate' or 'single'")
     facts = get_company_facts(symbol)
     filings = sec_get_filings(symbol, limit=5)
     _, closes = nav.price_series(s, symbol)
@@ -798,12 +801,13 @@ def research_run(symbol: str, s: Session = Depends(get_session)):
     context = {
         "fundamentals": facts or "unavailable",
         "recent_filings": [{"form": f["formType"], "date": f["filingDate"]} for f in filings],
+        "recent_headlines": get_news(symbol) or "unavailable",
         "price_summary": {
             "last_close": closes[-1] if closes else None,
             "technical_trend_score": compute_technical_trend(closes, spy) if closes else None,
         },
     }
-    result = run_ai_research(symbol, context)
+    result = run_ai_research(symbol, context, mode=mode)
     audit(s, "research_run", symbol, blocked=result.get("blocked", False),
           model=result.get("model"), tokens=result.get("usage"))
     if result.get("blocked"):

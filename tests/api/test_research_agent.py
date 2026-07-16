@@ -42,3 +42,53 @@ def test_audit_gate_rules():
     # Bad confidence → blocked.
     ok, v = audit_note({"sources": ["s"], "bear_case": "b", "confidence": "banana"})
     assert not ok and any("confidence" in x.lower() for x in v)
+
+
+def test_debate_flow_runs_three_agents_and_aggregates(monkeypatch):
+    import sys, types
+    from app import research_agent as ra
+
+    fake = types.ModuleType("anthropic")
+    fake.Anthropic = lambda api_key=None: object()
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+
+    calls = []
+    def fake_call(client, model, system, prompt, max_tokens=1200):
+        calls.append((system, prompt))
+        if "BULL" in system:
+            return "bull says up", {"input_tokens": 10, "output_tokens": 5}
+        if "BEAR" in system:
+            return "bear says down", {"input_tokens": 10, "output_tokens": 5}
+        return ('{"snapshot":"s","business_model":"bm","bull_case":"b+","bear_case":"b-",'
+                '"red_team":"rt","key_risks":["k"],"sources":["10-K"],"confidence":"Medium",'
+                '"missing_data":[]}',
+                {"input_tokens": 20, "output_tokens": 10})
+    monkeypatch.setattr(ra, "_call_claude", fake_call)
+
+    r = ra.generate_research("NVDA", {"x": 1}, api_key="test-key", mode="debate")
+    assert r["blocked"] is False
+    assert r["agents"] == ["bull_researcher", "bear_researcher", "pm_synthesis"]
+    assert r["usage"] == {"input_tokens": 40, "output_tokens": 20}  # 3 calls summed
+    assert r["bear_case"] == "b-"
+    # The PM synthesis actually received BOTH debate notes.
+    synth_prompt = calls[-1][1]
+    assert "bull says up" in synth_prompt and "bear says down" in synth_prompt
+    assert len(calls) == 3
+
+
+def test_single_mode_is_one_call(monkeypatch):
+    import sys, types
+    from app import research_agent as ra
+
+    fake = types.ModuleType("anthropic")
+    fake.Anthropic = lambda api_key=None: object()
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    calls = []
+    def fake_call(client, model, system, prompt, max_tokens=1200):
+        calls.append(1)
+        return ('{"snapshot":"s","bull_case":"b","bear_case":"br","red_team":"rt",'
+                '"sources":["x"],"confidence":"Low","missing_data":[]}',
+                {"input_tokens": 5, "output_tokens": 5})
+    monkeypatch.setattr(ra, "_call_claude", fake_call)
+    r = ra.generate_research("NVDA", {}, api_key="k", mode="single")
+    assert r["agents"] == ["single_analyst"] and len(calls) == 1

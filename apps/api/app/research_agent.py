@@ -32,39 +32,75 @@ SCHEMA_HINT = (
 )
 
 
+def _call_claude(client, model: str, system: str, prompt: str, max_tokens: int = 1200):
+    """Single Claude call → (text, usage_dict). The seam tests monkeypatch so
+    the multi-agent flow is verifiable without ever hitting the API."""
+    msg = client.messages.create(
+        model=model, max_tokens=max_tokens, system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+    return text, {"input_tokens": msg.usage.input_tokens, "output_tokens": msg.usage.output_tokens}
+
+
+def _add_usage(total: dict, u: dict) -> dict:
+    return {k: total.get(k, 0) + u.get(k, 0) for k in ("input_tokens", "output_tokens")}
+
+
 def generate_research(symbol: str, context: dict, api_key: str | None = None,
-                      model: str | None = None) -> dict:
+                      model: str | None = None, mode: str = "debate") -> dict:
     """Generate a real analyst note for `symbol` from `context` (facts/filings/
-    price summary). Returns the parsed note + metadata, or a blocked marker."""
+    price summary/headlines). mode="debate" (default) runs a three-agent flow —
+    independent Bull and Bear researchers, then a PM synthesis — mirroring the
+    agent-desk design; mode="single" is one cheaper call. Returns the parsed
+    note + metadata, or a blocked marker."""
     key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if not key:
         return {"blocked": True, "reason": "ANTHROPIC_API_KEY not configured — set it to enable live AI research",
                 "symbol": symbol, "asOf": now}
+    use_model = model or DEFAULT_MODEL
+    data_block = f"Ticker: {symbol}\n\nReal data available (use it, cite it):\n{json.dumps(context, indent=2, default=str)}"
     try:
         import anthropic
 
         client = anthropic.Anthropic(api_key=key)
-        prompt = (
-            f"Ticker: {symbol}\n\nReal data available (use it, cite it):\n"
-            f"{json.dumps(context, indent=2, default=str)}\n\n"
-            f"Produce a concise research note as a JSON object matching exactly this shape:\n{SCHEMA_HINT}"
-        )
-        msg = client.messages.create(
-            model=model or DEFAULT_MODEL,
-            max_tokens=2000,
-            system=SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        usage = {"input_tokens": 0, "output_tokens": 0}
+
+        if mode == "debate":
+            bull, u = _call_claude(
+                client, use_model,
+                SYSTEM + " You are the BULL researcher — build the strongest honest positive thesis. Advocacy role: your note is read alongside an independent bear note. Plain text, cite the data.",
+                data_block, max_tokens=700)
+            usage = _add_usage(usage, u)
+            bear, u = _call_claude(
+                client, use_model,
+                SYSTEM + " You are the BEAR researcher — build the strongest honest negative thesis: failure modes, valuation fragility, what breaks the bull case. Plain text, cite the data.",
+                data_block, max_tokens=700)
+            usage = _add_usage(usage, u)
+            synth_prompt = (
+                f"{data_block}\n\n--- BULL RESEARCHER NOTE ---\n{bull}\n\n"
+                f"--- BEAR RESEARCHER NOTE ---\n{bear}\n\n"
+                "As the Portfolio Manager, weigh the debate and produce the final note "
+                f"as a JSON object matching exactly this shape:\n{SCHEMA_HINT}\n"
+                "The red_team field must state what would prove the synthesis wrong."
+            )
+            text, u = _call_claude(client, use_model, SYSTEM, synth_prompt, max_tokens=2000)
+            usage = _add_usage(usage, u)
+            agents = ["bull_researcher", "bear_researcher", "pm_synthesis"]
+        else:
+            prompt = f"{data_block}\n\nProduce a concise research note as a JSON object matching exactly this shape:\n{SCHEMA_HINT}"
+            text, usage = _call_claude(client, use_model, SYSTEM, prompt, max_tokens=2000)
+            agents = ["single_analyst"]
+
         note = _parse_json(text)
         if note is None:
             return {"blocked": True, "reason": "Model did not return parseable JSON",
                     "symbol": symbol, "asOf": now, "raw": text[:500]}
         return {
-            "blocked": False, "symbol": symbol, "asOf": now, "model": model or DEFAULT_MODEL,
-            "source": "Anthropic API (live)",
-            "usage": {"input_tokens": msg.usage.input_tokens, "output_tokens": msg.usage.output_tokens},
+            "blocked": False, "symbol": symbol, "asOf": now, "model": use_model,
+            "mode": mode, "agents": agents,
+            "source": "Anthropic API (live)", "usage": usage,
             **note,
         }
     except Exception as e:

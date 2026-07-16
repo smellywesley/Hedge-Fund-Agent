@@ -28,9 +28,10 @@ main.sec_get_filings = lambda symbol, forms=None, limit=10: (
 )
 # Never call the real Anthropic API from tests (would cost tokens / hit network),
 # even if ANTHROPIC_API_KEY is set in the shell.
-main.run_ai_research = lambda symbol, context, api_key=None, model=None: {
+main.run_ai_research = lambda symbol, context, **kw: {
     "blocked": True, "reason": "stubbed in tests", "symbol": symbol,
 }
+main.get_news = lambda symbol, limit=8: []  # never hit Yahoo news in tests
 # FMP estimates: blocked in tests (no key) → growth_momentum stays mock.
 main.fmp_estimates = lambda symbol, api_key=None: {"blocked": True, "reason": "no key (test)", "source": "FMP"}
 # SEC XBRL fundamentals fixture (offline) → business_quality/balance_sheet/valuation real.
@@ -331,7 +332,7 @@ def test_run_stores_audited_report_and_latest_serves_it():
             "red_team": "Red.", "key_risks": ["r1"], "sources": ["10-K 2026"],
             "confidence": "Medium", "missing_data": []}
     orig = main.run_ai_research
-    main.run_ai_research = lambda symbol, context, api_key=None, model=None: dict(good)
+    main.run_ai_research = lambda symbol, context, **kw: dict(good)
     try:
         r = client.post("/api/research/NVDA/run").json()
         assert r["auditBlocked"] is False and r["stored"] is True and r["reportId"]
@@ -349,7 +350,7 @@ def test_audit_gate_blocks_and_does_not_store():
            "bull_case": "guaranteed upside", "bear_case": "", "sources": [],
            "confidence": "High"}
     orig = main.run_ai_research
-    main.run_ai_research = lambda symbol, context, api_key=None, model=None: dict(bad)
+    main.run_ai_research = lambda symbol, context, **kw: dict(bad)
     try:
         r = client.post("/api/research/MSFT/run").json()
         assert r["auditBlocked"] is True and r["stored"] is False

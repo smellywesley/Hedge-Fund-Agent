@@ -58,6 +58,41 @@ def get_quotes(symbols: list[str]) -> dict[str, dict]:
     return quotes
 
 
+_news_cache: dict[str, tuple[float, list]] = {}
+
+
+def get_news(symbol: str, limit: int = 8) -> list[dict]:
+    """Recent real headlines for `symbol` via yfinance (free, no key).
+    NOTE: vibe-trading's own news tool has no free US article feed (its
+    docstring says so) — yfinance is the honest source here. Handles both the
+    old flat item shape and the new nested `content` shape. Cached 15 min;
+    [] on any failure (caller declares missing news, never fakes it)."""
+    now = time.time()
+    if symbol in _news_cache and now - _news_cache[symbol][0] < 900:
+        return _news_cache[symbol][1]
+    try:
+        import yfinance as yf
+
+        raw = yf.Ticker(symbol).news or []
+        items = []
+        for n in raw[:limit]:
+            c = n.get("content", n)
+            title = c.get("title") or ""
+            if not title:
+                continue
+            provider = c.get("provider") or {}
+            items.append({
+                "title": title,
+                "publisher": provider.get("displayName") or c.get("publisher") or "?",
+                "published": c.get("pubDate") or c.get("providerPublishTime") or "",
+            })
+        if items:
+            _news_cache[symbol] = (now, items)
+        return items
+    except Exception:
+        return []
+
+
 def get_history(symbols: list[str], start: str) -> dict[str, list[dict]]:
     """Daily closes since `start` (ISO date), one HTTP call for all symbols.
     Returns {symbol: [{date, close, volume}, ...]} oldest→newest; failed
