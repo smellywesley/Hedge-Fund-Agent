@@ -26,6 +26,12 @@ main.sec_get_filings = lambda symbol, forms=None, limit=10: (
       "title": "NVDA 10-Q", "source": "SEC EDGAR", "asOf": "2026-07-14T00:00:00Z"}]
     if symbol.upper() == "NVDA" else []
 )
+# SEC XBRL fundamentals fixture (offline) → business_quality/balance_sheet/valuation real.
+main.get_company_facts = lambda symbol: ({
+    "revenue": 60_922e6, "gross_profit": 44_301e6, "operating_income": 32_972e6,
+    "net_income": 29_760e6, "assets": 65_728e6, "cash": 7_280e6,
+    "long_term_debt": 8_459e6, "shares": 2_464e6, "fiscal_year": 2024, "source": "SEC EDGAR XBRL",
+} if symbol.upper() == "NVDA" else {})
 
 # Deterministic fake history: 70 trading days from the simulated inception.
 # SPY follows a zigzag return pattern (net-positive drift); every stock moves
@@ -248,10 +254,10 @@ def test_markets_regime_is_computed_with_drivers():
 def test_research_declares_real_vs_mock_components():
     body = client.get("/api/research/NVDA/latest").json()
     src = body["component_sources"]
-    # technical_trend + liquidity_risk are computed from the fake history.
-    assert "technical_trend" in src["real"]
-    assert "liquidity_risk" in src["real"]
-    assert "valuation" in src["mock"]  # still mock
+    # 5 of 9 now real: 2 from price history, 3 from SEC XBRL fundamentals.
+    for k in ("technical_trend", "liquidity_risk", "business_quality", "balance_sheet", "valuation"):
+        assert k in src["real"], f"{k} should be real"
+    assert "growth_momentum" in src["mock"]  # still mock (no estimates source)
     assert body["score"]["score_total"] > 0
 
 

@@ -115,3 +115,38 @@ def compute_liquidity_score(dollar_adv: float) -> float:
     lo, hi = 1e5, 1e10
     x = max(lo, min(hi, dollar_adv))
     return round((math.log10(x) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) * 100, 1)
+
+
+# --------------------------------------------------------------------------
+# Fundamentals-based components from SEC XBRL company facts (backlog: OpenBB
+# replaced by keyless SEC facts). Pure functions over already-extracted numbers.
+# --------------------------------------------------------------------------
+
+def _clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+
+def compute_business_quality(gross_margin: float, operating_margin: float) -> float:
+    """0-100 from profitability. gross_margin/operating_margin are fractions.
+    Gross margin scores to 50 at 80%+, operating margin to 50 at 40%+."""
+    return round(_clamp01(gross_margin / 0.80) * 50 + _clamp01(operating_margin / 0.40) * 50, 1)
+
+
+def compute_balance_sheet(total_debt: float, total_assets: float, cash: float) -> float | None:
+    """0-100 from leverage + liquidity. Low debt/assets and healthy cash/assets
+    score high. None if assets are unknown/zero (can't judge)."""
+    if not total_assets or total_assets <= 0:
+        return None
+    leverage = total_debt / total_assets            # lower is better
+    cash_ratio = cash / total_assets                # higher is better
+    lev_pts = (1 - _clamp01(leverage / 0.60)) * 60  # 0% debt→60, 60%+→0
+    cash_pts = _clamp01(cash_ratio / 0.30) * 40     # 30%+ cash→40
+    return round(lev_pts + cash_pts, 1)
+
+
+def compute_valuation(earnings_yield: float) -> float:
+    """0-100 from earnings yield (net income / market cap). Cheaper = higher.
+    6%+ earnings yield (~P/E 16 or lower) scores 100; negative earnings → 0."""
+    if earnings_yield <= 0:
+        return 0.0
+    return round(_clamp01(earnings_yield / 0.06) * 100, 1)

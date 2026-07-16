@@ -26,14 +26,16 @@ from sqlalchemy.orm import Session
 # installs if this ever deploys beyond docker-compose.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.mcp.sec.edgar import get_company_facts
 from packages.mcp.sec.edgar import get_recent_filings as sec_get_filings
 from packages.research_engine.backtest import backtest_signal, score_threshold_signal
 from packages.research_engine.regime import compute_regime_score
 from packages.research_engine.risk import beta as risk_beta
 from packages.research_engine.risk import correlation_matrix
 from packages.research_engine.scoring import (
-    compute_confidence, compute_liquidity_score, compute_research_score,
-    compute_technical_trend,
+    compute_balance_sheet, compute_business_quality, compute_confidence,
+    compute_liquidity_score, compute_research_score, compute_technical_trend,
+    compute_valuation,
 )
 from packages.research_engine.valuation import dcf_fair_value, scenario_values
 
@@ -699,9 +701,10 @@ def ticker_news(symbol: str):
 
 
 def _real_components(s: Session, symbol: str) -> tuple[dict, list[str]]:
-    """Compute the two real score components (technical_trend, liquidity_risk)
-    from stored price history. Returns (overrides, real_keys). Backfills price
-    history on demand so a fresh symbol still gets scored."""
+    """Compute the real score components from live data. Price history gives
+    technical_trend + liquidity_risk; SEC XBRL company facts give
+    business_quality + balance_sheet + valuation. Returns (overrides, real_keys);
+    each is included only when its inputs are available."""
     nav.backfill_prices(s, [symbol, nav.BENCHMARK])
     _, closes = nav.price_series(s, symbol)
     _, spy = nav.price_series(s, nav.BENCHMARK)
@@ -716,6 +719,24 @@ def _real_components(s: Session, symbol: str) -> tuple[dict, list[str]]:
     if advs:
         overrides["liquidity_risk"] = compute_liquidity_score(sum(advs) / len(advs))
         real.append("liquidity_risk")
+
+    # Fundamentals from SEC XBRL (keyless). Only add a component when its inputs exist.
+    f = get_company_facts(symbol)
+    rev = f.get("revenue")
+    if rev and f.get("gross_profit") is not None and f.get("operating_income") is not None:
+        overrides["business_quality"] = compute_business_quality(f["gross_profit"] / rev, f["operating_income"] / rev)
+        real.append("business_quality")
+    bs = compute_balance_sheet(f.get("long_term_debt", 0) or 0, f.get("assets", 0) or 0, f.get("cash", 0) or 0)
+    if bs is not None:
+        overrides["balance_sheet"] = bs
+        real.append("balance_sheet")
+    # Valuation: earnings yield = net income / market cap (price × shares).
+    price = closes[-1] if closes else None
+    if f.get("net_income") is not None and f.get("shares") and price:
+        market_cap = price * f["shares"]
+        if market_cap > 0:
+            overrides["valuation"] = compute_valuation(f["net_income"] / market_cap)
+            real.append("valuation")
     return overrides, real
 
 

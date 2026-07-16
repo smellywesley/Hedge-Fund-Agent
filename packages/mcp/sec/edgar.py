@@ -15,6 +15,19 @@ from datetime import datetime, timezone
 USER_AGENT = "Terminal Alpha educational research (contact: research@example.com)"
 _ticker_cache: dict[str, str] = {}          # TICKER -> zero-padded CIK
 _submissions_cache: dict[str, dict] = {}    # CIK -> submissions json
+_facts_cache: dict[str, dict] = {}          # CIK -> companyfacts json
+
+# us-gaap concept name candidates per metric (first present wins).
+_CONCEPTS = {
+    "revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+    "gross_profit": ["GrossProfit"],
+    "operating_income": ["OperatingIncomeLoss"],
+    "net_income": ["NetIncomeLoss"],
+    "assets": ["Assets"],
+    "equity": ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
+    "cash": ["CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations"],
+    "long_term_debt": ["LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations"],
+}
 
 
 def _get_json(url: str) -> dict:
@@ -38,6 +51,53 @@ def _load_cik_map() -> dict[str, str]:
 
 def get_cik(symbol: str) -> str | None:
     return _load_cik_map().get(symbol.strip().upper())
+
+
+def _latest_annual(concept: dict):
+    """Latest annual (FY, 10-K/20-F) USD value for one XBRL concept."""
+    units = concept.get("units", {})
+    usd = units.get("USD") or next(iter(units.values()), [])
+    annual = [x for x in usd if x.get("fp") == "FY" and x.get("form") in ("10-K", "20-F")]
+    pool = annual or usd
+    if not pool:
+        return None
+    latest = max(pool, key=lambda x: x.get("end", ""))
+    return latest.get("val"), latest.get("fy"), latest.get("end")
+
+
+def get_company_facts(symbol: str) -> dict:
+    """Latest-annual fundamentals from SEC XBRL company facts (keyless).
+    Returns {revenue, gross_profit, operating_income, net_income, assets,
+    equity, cash, long_term_debt, fiscal_year, source, asOf} — or {} on failure."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        cik = get_cik(symbol)
+        if not cik:
+            return {}
+        if cik not in _facts_cache:
+            _facts_cache[cik] = _get_json(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json")
+        gaap = _facts_cache[cik].get("facts", {}).get("us-gaap", {})
+        out: dict = {}
+        for metric, names in _CONCEPTS.items():
+            for name in names:
+                if name in gaap:
+                    v = _latest_annual(gaap[name])
+                    if v and v[0] is not None:
+                        out[metric] = v[0]
+                        out.setdefault("fiscal_year", v[1])
+                        break
+        if not out:
+            return {}
+        dei = _facts_cache[cik].get("facts", {}).get("dei", {})
+        if "EntityCommonStockSharesOutstanding" in dei:
+            sv = _latest_annual(dei["EntityCommonStockSharesOutstanding"])
+            if sv and sv[0]:
+                out["shares"] = sv[0]
+        out["source"] = "SEC EDGAR XBRL"
+        out["asOf"] = now
+        return out
+    except Exception:
+        return {}
 
 
 def get_recent_filings(symbol, forms=("10-K", "10-Q", "8-K"), limit=10) -> list[dict]:

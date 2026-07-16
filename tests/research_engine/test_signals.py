@@ -49,3 +49,30 @@ def test_liquidity_midpoint_reasonable():
     # $100M ADV should land in a healthy mid-high band (log midpoint-ish).
     s = compute_liquidity_score(1e8)
     assert 55 <= s <= 65
+
+
+from packages.research_engine.scoring import (
+    compute_balance_sheet, compute_business_quality, compute_valuation,
+)
+
+
+def test_business_quality_from_margins():
+    assert compute_business_quality(0.80, 0.40) == 100.0   # both at/above cap
+    assert compute_business_quality(0.40, 0.20) == 50.0     # half each
+    assert compute_business_quality(1.0, 0.6) == 100.0      # clamps
+    assert compute_business_quality(0.0, 0.0) == 0.0
+
+
+def test_balance_sheet_leverage_and_cash():
+    assert compute_balance_sheet(0, 0, 0) is None            # no assets → unknown
+    assert compute_balance_sheet(0, 100, 30) == 100.0        # no debt, 30% cash
+    assert compute_balance_sheet(60, 100, 0) == 0.0          # 60% debt, no cash
+    assert compute_balance_sheet(30, 100, 15) == 50.0        # mid leverage + cash
+
+
+def test_valuation_from_earnings_yield():
+    assert compute_valuation(0) == 0.0
+    assert compute_valuation(-0.05) == 0.0                   # losses → 0
+    assert compute_valuation(0.06) == 100.0                  # ~P/E 16 → cheap
+    assert compute_valuation(0.03) == 50.0
+    assert compute_valuation(0.20) == 100.0                  # clamps
