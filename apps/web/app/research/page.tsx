@@ -1,7 +1,68 @@
-import { RESEARCH_NVDA as R, RESEARCH_SCORE } from "@/lib/mock";
+"use client";
+import { RESEARCH_NVDA as R } from "@/lib/mock";
+import { useApi } from "@/lib/api";
+import { PriceChart } from "@/components/PriceChart";
 import { AiMeta, ConfidenceBadge, Panel, StatusBadge, Table } from "@/components/ui";
 
 const meta = { sources: ["MOCK research pack"], asOf: R.asOf, confidence: R.confidence, missingData: R.missingData };
+
+// Human labels + weights for the 9 score components (weights match the engine).
+const COMPONENT_META: Record<string, { label: string; weightPct: number }> = {
+  business_quality: { label: "Business Quality", weightPct: 15 },
+  growth_momentum: { label: "Growth / Estimate Momentum", weightPct: 15 },
+  balance_sheet: { label: "Balance Sheet Strength", weightPct: 10 },
+  valuation: { label: "Valuation Attractiveness", weightPct: 15 },
+  technical_trend: { label: "Technical Trend", weightPct: 10 },
+  catalyst_strength: { label: "Catalyst Strength", weightPct: 10 },
+  estimate_revision: { label: "Analyst / Estimate Revision", weightPct: 10 },
+  news_sentiment: { label: "News / Sentiment", weightPct: 5 },
+  liquidity_risk: { label: "Liquidity / Risk Control", weightPct: 10 },
+};
+
+interface ResearchLatest {
+  confidence: string;
+  score: { score_total: number; components: Record<string, number> };
+  component_sources: { real: string[]; mock: string[] };
+}
+const SCORE_FALLBACK: ResearchLatest = {
+  confidence: "Medium",
+  score: { score_total: 78.8, components: { business_quality: 90, growth_momentum: 88, balance_sheet: 92, valuation: 45, technical_trend: 80, catalyst_strength: 75, estimate_revision: 82, news_sentiment: 70, liquidity_risk: 95 } },
+  component_sources: { real: [], mock: Object.keys(COMPONENT_META) },
+};
+
+function ScorePanel() {
+  const { data } = useApi<ResearchLatest>("/api/research/NVDA/latest", SCORE_FALLBACK);
+  const realSet = new Set(data.component_sources?.real ?? []);
+  const keys = Object.keys(COMPONENT_META);
+  return (
+    <Panel
+      title="Research Score"
+      right={<span className="text-[10px] text-term-dim">{realSet.size} real · {keys.length - realSet.size} mock</span>}
+    >
+      <div className="mb-1 text-lg text-term-green">
+        {data.score.score_total}/100 <ConfidenceBadge level={(data.confidence as "High" | "Medium" | "Low") ?? "Medium"} />
+      </div>
+      <Table
+        headers={["Component", "Wt", "Score", "Source"]}
+        rows={keys.map((k) => {
+          const v = data.score.components[k] ?? 0;
+          const real = realSet.has(k);
+          return [
+            COMPONENT_META[k].label,
+            `${COMPONENT_META[k].weightPct}%`,
+            <span key="v" className={v >= 70 ? "text-term-green" : v >= 50 ? "text-term-amber" : "text-term-red"}>{v}</span>,
+            <span key="s" className={`border px-1 text-[10px] ${real ? "border-term-green text-term-green" : "border-term-amber text-term-amber"}`}>
+              {real ? "REAL" : "MOCK"}
+            </span>,
+          ];
+        })}
+      />
+      <p className="mt-2 text-[10px] text-term-dim">
+        REAL components are computed from live price history; MOCK ones await their own data. Score is a research signal, not advice.
+      </p>
+    </Panel>
+  );
+}
 
 export default function ResearchPage() {
   return (
@@ -11,8 +72,10 @@ export default function ResearchPage() {
         <span className="border border-term-amber px-2 py-0.5 text-term-amber">{R.symbol}</span>
         <button className="border border-term-border px-2 py-0.5 text-term-dim" title="Phase 5 runs the agent workflow">RUN RESEARCH (mock)</button>
         <button className="border border-term-border px-2 py-0.5 text-term-dim" title="Phase 6 builds exportable reports">BUILD REPORT (mock)</button>
-        <span className="ml-auto text-[10px] text-term-dim">Phase 1 ships one full mock report: NVDA</span>
+        <span className="ml-auto text-[10px] text-term-dim">Live price + real score components; narrative is mock (NVDA)</span>
       </div>
+
+      <PriceChart symbol="NVDA" />
 
       <div className="grid grid-cols-1 gap-2 xl:grid-cols-3">
         <Panel title="Company Snapshot">
@@ -23,19 +86,7 @@ export default function ResearchPage() {
           <p>{R.businessModel}</p>
           <AiMeta {...meta} />
         </Panel>
-        <Panel title="Research Score">
-          <div className="mb-1 text-lg text-term-green">
-            {RESEARCH_SCORE.scoreTotal}/100 <ConfidenceBadge level={RESEARCH_SCORE.confidence} />
-          </div>
-          <Table
-            headers={["Component", "Wt", "Score"]}
-            rows={RESEARCH_SCORE.components.map((c) => [
-              c.name,
-              `${c.weightPct}%`,
-              <span key="v" className={c.value >= 70 ? "text-term-green" : c.value >= 50 ? "text-term-amber" : "text-term-red"}>{c.value}</span>,
-            ])}
-          />
-        </Panel>
+        <ScorePanel />
 
         <Panel title="Financial Statement Summary">
           <Table
@@ -57,12 +108,11 @@ export default function ResearchPage() {
           <Table headers={["Date", "Event", "Type"]} rows={R.catalysts.map((c) => [c.date, c.event, <span key="t" className="text-term-blue">{c.type}</span>])} />
         </Panel>
 
-        <Panel title="Filing Reader (placeholder)">
-          <p className="text-term-dim">Phase 3: SEC EDGAR ingestion → 10-K/10-Q/8-K summaries with direct citations. See News/Filings tab for mock filing list.</p>
+        <Panel title="Filing Reader">
+          <p className="text-term-dim">Real 10-K/10-Q/8-K filings are live on the News &amp; Filings tab (SEC EDGAR, keyless).</p>
         </Panel>
-        <Panel title="Valuation Lab (placeholder)">
-          <p className="text-term-dim">Phase 4: DCF, comps, historical multiples, sensitivity. Mock assumptions live in Model Lab tab.</p>
-          <p className="mt-1">Mock range: <span className="text-term-red">$95 bear</span> · <span className="text-term-amber">$175 base</span> · <span className="text-term-green">$240 bull</span></p>
+        <Panel title="Valuation Lab">
+          <p className="text-term-dim">The DCF is now editable with live recomputation on the Model Lab tab (bear/base/bull fair value).</p>
         </Panel>
         <Panel title="Risk Register">
           <Table

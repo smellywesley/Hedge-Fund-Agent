@@ -1,4 +1,5 @@
 import { REPORTS } from "@/lib/mock";
+import { BacktestPanel } from "@/components/BacktestPanel";
 import { ConfidenceBadge, Panel, StatusBadge, Table } from "@/components/ui";
 
 const GENERATORS = [
@@ -10,6 +11,8 @@ const GENERATORS = [
 export default function ReportsPage() {
   return (
     <div className="space-y-2">
+      <BacktestPanel />
+
       <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
         {GENERATORS.map((g) => (
           <Panel key={g.name} title={g.name}>
