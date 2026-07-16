@@ -1,9 +1,17 @@
 # Phase B — Real analyst narrative (quant-coder task brief)
 
-**Status:** READY TO RUN. Blocked only by (1) the subagent weekly limit (resets
-Jul 18, 6am SGT) and (2) needing a Claude Code session **rooted in this folder**
-(`Wesley Financial Agent`) so the `quant-coder` agent and the `vibe-trading` MCP
-actually load. Dispatch this then.
+**Status: CORE BUILT (directly, 2026-07-14)** — the user chose not to wait for
+the subagent limit reset. Items 1–4 below are implemented and tested:
+`research_reports` table (db.py), the Audit gate (`research_agent.audit_note` —
+blocks unsourced / bear-case-missing / certainty-language notes),
+`/api/research/{symbol}/run` generates via the Anthropic API and stores only
+audit-passed notes, `/api/research/{symbol}/latest` serves the stored real
+report with the mock narrative as a declared fallback.
+
+**Remaining for the quant-coder (optional enrichment, needs Wesley-rooted
+session + subagent capacity):** use the `vibe-trading` MCP research tools
+(news/sentiment) to enrich the generation context, and a multi-agent
+bull-vs-bear debate flow instead of the current single-call generation.
 
 ## Goal
 Replace the **mock research narrative** in `apps/api/app/mock_data.py`

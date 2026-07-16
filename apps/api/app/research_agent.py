@@ -71,6 +71,24 @@ def generate_research(symbol: str, context: dict, api_key: str | None = None,
         return {"blocked": True, "reason": f"AI research call failed: {e}", "symbol": symbol, "asOf": now}
 
 
+def audit_note(note: dict) -> tuple[bool, list[str]]:
+    """Audit-Agent gate (docs/agent_contracts.md): a generated note is only
+    storable if it cites sources, includes a bear case, carries a confidence,
+    and never presents the thesis as certainty. Returns (ok, violations)."""
+    violations = []
+    if not note.get("sources"):
+        violations.append("No sources cited — every claim needs a source")
+    if not str(note.get("bear_case", "")).strip():
+        violations.append("Missing bear case — reports without one are blocked")
+    if note.get("confidence") not in ("High", "Medium", "Low"):
+        violations.append("Missing or invalid confidence rating")
+    text = " ".join(str(note.get(k, "")) for k in ("snapshot", "bull_case", "bear_case", "red_team")).lower()
+    for phrase in ("guaranteed", "can't lose", "cannot lose", "certain to", "sure thing", "risk-free"):
+        if phrase in text:
+            violations.append(f"Certainty language ('{phrase}') — recommendations must never be presented as certainty")
+    return (not violations, violations)
+
+
 def _parse_json(text: str) -> dict | None:
     """Parse the model's JSON, tolerating ```json fences or surrounding prose."""
     text = text.strip()

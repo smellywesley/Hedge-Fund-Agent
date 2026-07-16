@@ -320,3 +320,43 @@ def test_prices_endpoint_has_series_and_ma_overlays():
     assert last["ma200"] is None
     # Early points have no 50DMA yet.
     assert body["series"][0]["ma50"] is None
+
+
+# ------------------------------------------- Phase B: stored, audited reports
+
+def test_run_stores_audited_report_and_latest_serves_it():
+    good = {"blocked": False, "symbol": "NVDA", "asOf": "t", "model": "test-model",
+            "source": "Anthropic API (live)", "snapshot": "Real snapshot.",
+            "business_model": "Real biz.", "bull_case": "Bull.", "bear_case": "Bear.",
+            "red_team": "Red.", "key_risks": ["r1"], "sources": ["10-K 2026"],
+            "confidence": "Medium", "missing_data": []}
+    orig = main.run_ai_research
+    main.run_ai_research = lambda symbol, context, api_key=None, model=None: dict(good)
+    try:
+        r = client.post("/api/research/NVDA/run").json()
+        assert r["auditBlocked"] is False and r["stored"] is True and r["reportId"]
+        latest = client.get("/api/research/NVDA/latest").json()
+        assert latest["narrativeSource"] == "generated"
+        assert latest["bear_case"] == "Bear."
+        assert latest["sources"] == ["10-K 2026"]
+        assert "score" in latest and "component_sources" in latest  # scores still live
+    finally:
+        main.run_ai_research = orig
+
+
+def test_audit_gate_blocks_and_does_not_store():
+    bad = {"blocked": False, "symbol": "MSFT", "snapshot": "x",
+           "bull_case": "guaranteed upside", "bear_case": "", "sources": [],
+           "confidence": "High"}
+    orig = main.run_ai_research
+    main.run_ai_research = lambda symbol, context, api_key=None, model=None: dict(bad)
+    try:
+        r = client.post("/api/research/MSFT/run").json()
+        assert r["auditBlocked"] is True and r["stored"] is False
+        assert any("bear" in v.lower() for v in r["violations"])
+        assert any("source" in v.lower() for v in r["violations"])
+        assert any("certainty" in v.lower() for v in r["violations"])
+        # Nothing stored → no report to serve for MSFT.
+        assert client.get("/api/research/MSFT/latest").status_code == 404
+    finally:
+        main.run_ai_research = orig

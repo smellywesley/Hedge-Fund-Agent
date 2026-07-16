@@ -12,6 +12,7 @@ no real-money trading, not financial advice.
 New endpoints return camelCase (matches apps/web/lib/types.ts); untouched
 Phase 1 mock endpoints keep snake_case until their Phase 3/4 rewrite.
 """
+import json
 import re
 import sys
 from datetime import date, datetime, timezone
@@ -42,10 +43,11 @@ from packages.research_engine.valuation import dcf_fair_value, scenario_values
 
 from . import mock_data as mock
 from . import nav
+from .research_agent import audit_note
 from .research_agent import generate_research as run_ai_research
 from .db import (
     DATABASE_URL, AuditRow, FundRow, JournalRow, PositionRow, PriceRow,
-    WatchlistRow, audit, engine, init_db,
+    ResearchReportRow, WatchlistRow, audit, engine, init_db,
 )
 from .prices import get_quotes
 
@@ -750,18 +752,37 @@ def _real_components(s: Session, symbol: str) -> tuple[dict, list[str]]:
 
 @app.get("/api/research/{symbol}/latest")
 def research_latest(symbol: str, s: Session = Depends(get_session)):
-    symbol = _require_ticker(symbol)
-    if symbol != "NVDA":
-        raise HTTPException(404, "Phase 1 ships one full mock report: NVDA")
-    # Two components are now real (from price history); the rest stay mock and
-    # are declared so, honouring the never-hide-the-seam rule.
+    """Latest research: a STORED AI-generated report if one exists (real,
+    audit-passed), else the mock NVDA narrative (declared). Score components
+    are computed live either way."""
+    symbol = _validate_symbol(symbol)
     overrides, real_keys = _real_components(s, symbol)
     components = {**mock.SCORE_COMPONENTS_NVDA, **overrides}
     score = compute_research_score(components)
+    sources_block = {"real": real_keys,
+                     "mock": [k for k in components if k not in real_keys]}
+
+    row = (s.query(ResearchReportRow).filter_by(symbol=symbol)
+           .order_by(ResearchReportRow.id.desc()).first())
+    if row:
+        return {
+            "symbol": symbol, "narrativeSource": "generated",
+            "snapshot": row.snapshot, "business_model": row.business_model,
+            "bull_case": row.bull_case, "bear_case": row.bear_case,
+            "red_team": row.red_team,
+            "key_risks": json.loads(row.key_risks),
+            "sources": json.loads(row.sources),
+            "missing_data": json.loads(row.missing_data),
+            "confidence": row.confidence, "model": row.model,
+            "generated_at": row.generated_at,
+            "score": score, "component_sources": sources_block,
+        }
+    if symbol != "NVDA":
+        raise HTTPException(404, f"No stored research for {symbol} yet — press Run Research (mock narrative exists only for NVDA)")
     confidence = compute_confidence(**mock.CONFIDENCE_FACTORS_NVDA)
-    return {**mock.RESEARCH_NVDA, "score": score, "confidence": confidence,
-            "component_sources": {"real": real_keys,
-                                  "mock": [k for k in components if k not in real_keys]}}
+    return {**mock.RESEARCH_NVDA, "narrativeSource": "mock",
+            "score": score, "confidence": confidence,
+            "component_sources": sources_block}
 
 
 @app.post("/api/research/{symbol}/run")
@@ -785,8 +806,36 @@ def research_run(symbol: str, s: Session = Depends(get_session)):
     result = run_ai_research(symbol, context)
     audit(s, "research_run", symbol, blocked=result.get("blocked", False),
           model=result.get("model"), tokens=result.get("usage"))
+    if result.get("blocked"):
+        s.commit()
+        return result
+
+    # Audit-Agent gate: only sourced, bear-cased, non-certainty notes get stored.
+    ok, violations = audit_note(result)
+    if not ok:
+        audit(s, "research_audit_blocked", symbol, violations=violations)
+        s.commit()
+        return {**result, "auditBlocked": True, "stored": False, "violations": violations,
+                "note": "Generated note failed the audit gate and was NOT stored."}
+
+    row = ResearchReportRow(
+        symbol=symbol,
+        snapshot=result.get("snapshot", ""),
+        business_model=result.get("business_model", ""),
+        bull_case=result.get("bull_case", ""),
+        bear_case=result.get("bear_case", ""),
+        red_team=result.get("red_team", ""),
+        key_risks=json.dumps(result.get("key_risks", [])),
+        sources=json.dumps(result.get("sources", [])),
+        missing_data=json.dumps(result.get("missing_data", [])),
+        confidence=result.get("confidence", "Low"),
+        model=result.get("model", ""),
+    )
+    s.add(row)
+    s.flush()
+    audit(s, "research_report_stored", symbol, report_id=row.id)
     s.commit()
-    return result
+    return {**result, "auditBlocked": False, "stored": True, "reportId": row.id}
 
 
 @app.get("/api/agents/outputs")

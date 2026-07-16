@@ -85,6 +85,26 @@ class NavRow(Base):
     nav: Mapped[float] = mapped_column(Float)
 
 
+class ResearchReportRow(Base):
+    """AI-generated research notes (Run Research button), stored only after
+    passing the audit gate. JSON-encoded list fields kept as Text for
+    SQLite/Postgres parity."""
+    __tablename__ = "research_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String, index=True)
+    snapshot: Mapped[str] = mapped_column(Text, default="")
+    business_model: Mapped[str] = mapped_column(Text, default="")
+    bull_case: Mapped[str] = mapped_column(Text, default="")
+    bear_case: Mapped[str] = mapped_column(Text, default="")
+    red_team: Mapped[str] = mapped_column(Text, default="")
+    key_risks: Mapped[str] = mapped_column(Text, default="[]")
+    sources: Mapped[str] = mapped_column(Text, default="[]")
+    missing_data: Mapped[str] = mapped_column(Text, default="[]")
+    confidence: Mapped[str] = mapped_column(String, default="Low")
+    model: Mapped[str] = mapped_column(String, default="")
+    generated_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
+
+
 class AuditRow(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
